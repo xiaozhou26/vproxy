@@ -1,4 +1,5 @@
 #[derive(thiserror::Error, Debug)]
+
 pub enum Error {
     #[error(transparent)]
     IOError(#[from] std::io::Error),
@@ -16,7 +17,7 @@ pub enum Error {
     SelfUpdateError(#[from] self_github_update::errors::Error),
 
     #[error(transparent)]
-    Socks5Error(#[from] crate::proxy::Error),
+    Socks5Error(#[from] Box<crate::proxy::Error>),
 
     #[cfg(target_family = "unix")]
     #[error(transparent)]

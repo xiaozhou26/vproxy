@@ -8,7 +8,7 @@ mod socks5;
 
 use self::connect::Connector;
 use crate::{AuthMode, BootArgs, Proxy};
-pub use socks5::Error;
+pub use crate::error::Error;
 use std::net::{IpAddr, SocketAddr};
 use tracing::Level;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
@@ -26,7 +26,24 @@ struct ProxyContext {
     pub connector: Connector,
 }
 
-pub fn run(args: BootArgs) -> crate::Result<()> {
+impl ProxyContext {
+    fn new(args: &BootArgs, auth: AuthMode) -> Self {
+        ProxyContext {
+            bind: args.bind,
+            concurrent: args.concurrent,
+            auth,
+            whitelist: args.whitelist.clone(),
+            connector: Connector::new(
+                args.cidr.clone(),
+                args.fallback,
+                args.connect_timeout,
+                args.fixed_subnet_48.clone(),
+            ),
+        }
+    }
+}
+
+pub fn run(args: BootArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger with a filter that ignores WARN level logs for netlink_proto
     let filter = EnvFilter::from_default_env()
         .add_directive(
@@ -54,8 +71,6 @@ pub fn run(args: BootArgs) -> crate::Result<()> {
     tracing::info!("Concurrent: {}", args.concurrent);
     tracing::info!("Connect timeout: {:?}s", args.connect_timeout);
 
-
-
     #[cfg(target_family = "unix")]
     {
         use nix::sys::resource::{setrlimit, Resource};
@@ -64,18 +79,18 @@ pub fn run(args: BootArgs) -> crate::Result<()> {
         setrlimit(Resource::RLIMIT_NOFILE, soft_limit.into(), hard_limit)?;
     }
 
-    let ctx = move |auth: AuthMode| ProxyContext {
-        bind: args.bind,
-        concurrent: args.concurrent,
-        auth,
-        whitelist: args.whitelist,
-        connector: Connector::new(args.cidr, args.fallback, args.connect_timeout),
-    };
+    let ctx = ProxyContext::new(&args, match args.proxy {
+        Proxy::Http { ref auth } | Proxy::Socks5 { ref auth } => auth.clone(),
+    });
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .max_blocking_threads(args.concurrent)
-        .build()?
+        .build()
+        .map_err(|e| {
+            tracing::error!("Failed to build Tokio runtime: {:?}", e);
+            Box::new(e) as Box<dyn std::error::Error>
+        })?
         .block_on(async {
             #[cfg(target_os = "linux")]
             if let Some(cidr) = &args.cidr {
@@ -83,8 +98,14 @@ pub fn run(args: BootArgs) -> crate::Result<()> {
                 route::sysctl_route_add_cidr(&cidr).await;
             }
             match args.proxy {
-                Proxy::Http { auth } => http::proxy(ctx(auth)).await,
-                Proxy::Socks5 { auth } => socks5::proxy(ctx(auth)).await,
+                Proxy::Http { .. } => http::proxy(ctx).await,
+                Proxy::Socks5 { .. } => socks5::proxy(ctx).await,
             }
         })
+        .map_err(|e| {
+            tracing::error!("Runtime block error: {:?}", e);
+            Box::new(e) as Box<dyn std::error::Error>
+        })?;
+
+    Ok(())
 }

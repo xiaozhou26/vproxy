@@ -4,7 +4,7 @@ mod daemon;
 pub mod error;
 mod proxy;
 mod update;
-
+use cidr::Ipv6Cidr;
 use clap::{Args, Parser, Subcommand};
 use std::net::SocketAddr;
 
@@ -91,6 +91,9 @@ pub struct BootArgs {
     /// Fallback address
     #[clap(short, long)]
     fallback: Option<std::net::IpAddr>,
+    /// Fixed /48 subnet
+    #[clap(short = 's', long)]
+    fixed_subnet_48: Option<Ipv6Cidr>, 
 
     #[clap(subcommand)]
     proxy: Proxy,

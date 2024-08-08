@@ -35,6 +35,8 @@ pub struct Connector {
     connect_timeout: Duration,
     /// TTL Calculator
     ttl: ttl::TTLCalculator,
+    /// Optional fixed /64 subnet segment.
+    fixed_subnet_64: Option<Ipv6Cidr>,
 }
 
 impl Connector {
@@ -44,12 +46,14 @@ impl Connector {
         cidr: Option<IpCidr>,
         fallback: Option<IpAddr>,
         connect_timeout: u64,
+        fixed_subnet_64: Option<Ipv6Cidr>,
     ) -> Self {
         Connector {
             cidr,
             fallback,
             connect_timeout: Duration::from_secs(connect_timeout),
             ttl: ttl::TTLCalculator,
+            fixed_subnet_64,
         }
     }
 
@@ -576,9 +580,11 @@ impl Connector {
     /// generated from the hash. If the extension is not a Session, the function
     /// generates a random IPv6 address within the CIDR range.
     fn assign_ipv6_from_extension(&self, cidr: &Ipv6Cidr, extension: &Extension) -> Ipv6Addr {
+        if let Some(fixed_subnet_64) = &self.fixed_subnet_64 {
+            return self.assign_ipv6_from_fixed_subnet(fixed_subnet_64);
+        }
+
         if let Some(combined) = self.combined(extension) {
-            // Calculate the subnet mask and apply it to ensure the base_ip is preserved in
-            // the non-variable part
             let subnet_mask = !((1u128 << (128 - cidr.network_length())) - 1);
             let base_ip_bits = u128::from(cidr.first_address()) & subnet_mask;
             let capacity = 2u128.pow(128 - cidr.network_length() as u32) - 1;
@@ -618,6 +624,17 @@ impl Connector {
             _ => None,
         }
     }
+
+
+    /// Assigns an IPv6 address from a fixed /64 subnet.
+    fn assign_ipv6_from_fixed_subnet(&self, fixed_subnet: &Ipv6Cidr) -> Ipv6Addr {
+        let base_ip = fixed_subnet.first_address();
+        let host_part: u64 = random();
+        let ip_num = (u128::from(base_ip) & 0xffff_ffff_ffff_ffff_0000_0000_0000_0000)
+            | (host_part as u128);
+        Ipv6Addr::from(ip_num)
+    }
+
 }
 
 /// Returns the last error encountered during a series of connection attempts,
