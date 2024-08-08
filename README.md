@@ -91,7 +91,7 @@ To run the server with a fixed subnet, use the --fixed-subnet-48 option:
   
 ```shell
 # Run the server http/socks5 with fixed subnet
-vproxy run -i 2001:470:e953::/48 --fixed-subnet-48 2001:4/48 http
+vproxy run -i 2001:470:e953::/48 --fixed-subnet-48 2001:470:e953::/48 http
 ```
 ## Manual
 
