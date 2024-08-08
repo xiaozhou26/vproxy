@@ -36,6 +36,7 @@ pub struct Connector {
     /// TTL Calculator
     ttl: ttl::TTLCalculator,
     fixed_subnet_48: Option<Ipv6Cidr>,
+    fixed_subnet_part: u16,
 }
 
 impl Connector {
@@ -53,6 +54,7 @@ impl Connector {
             connect_timeout: Duration::from_secs(connect_timeout),
             ttl: ttl::TTLCalculator,
             fixed_subnet_48,
+            fixed_subnet_part: random(),
         }
     }
 
@@ -578,9 +580,10 @@ impl Connector {
     /// ID. The network part of the address is preserved, and the host part is
     /// generated from the hash. If the extension is not a Session, the function
     /// generates a random IPv6 address within the CIDR range.
+
     fn assign_ipv6_from_extension(&self, cidr: &Ipv6Cidr, extension: &Extension) -> Ipv6Addr {
         if let Some(fixed_subnet_48) = &self.fixed_subnet_48 {
-            return self.assign_ipv6_from_fixed_subnet(fixed_subnet_48);
+            return self.assign_ipv6_from_fixed_subnet(fixed_subnet_48.first_address().into(), fixed_subnet_48.network_length());
         }
         if let Some(combined) = self.combined(extension) {
             // Calculate the subnet mask and apply it to ensure the base_ip is preserved in
@@ -594,12 +597,12 @@ impl Connector {
 
         assign_rand_ipv6(cidr.first_address().into(), cidr.network_length())
     }
-    fn assign_ipv6_from_fixed_subnet(&self, fixed_subnet: &Ipv6Cidr) -> Ipv6Addr {
-        let base_ip = fixed_subnet.first_address();
-        let host_part: u64 = random();
-        let ip_num = (u128::from(base_ip) & 0xffff_ffff_ffff_ffff_0000_0000_0000_0000)
-            | (host_part as u128);
-        Ipv6Addr::from(ip_num)
+    fn assign_ipv6_from_fixed_subnet(&self, ipv6: u128, prefix_len: u8) -> Ipv6Addr {
+        let rand: u128 = random();
+        let net_part = (ipv6 >> (128 - prefix_len)) << (128 - prefix_len);
+        let host_part = (rand << prefix_len) >> prefix_len;
+        let fixed_subnet_part = (self.fixed_subnet_part as u128) << 64;
+        Ipv6Addr::from(net_part | fixed_subnet_part | host_part)
     }
 
     /// Combines values from an `Extensions` variant into a single `u128` value.
