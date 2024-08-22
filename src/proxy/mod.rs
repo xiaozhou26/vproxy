@@ -54,22 +54,30 @@ pub fn run(args: BootArgs) -> crate::Result<()> {
     tracing::info!("Concurrent: {}", args.concurrent);
     tracing::info!("Connect timeout: {:?}s", args.connect_timeout);
 
-
+    
 
     #[cfg(target_family = "unix")]
     {
-        use nix::sys::resource::{setrlimit, Resource};
-        let soft_limit = (args.concurrent * 3) as u64;
-        let hard_limit = 1048576;
-        setrlimit(Resource::RLIMIT_NOFILE, soft_limit.into(), hard_limit)?;
+        if args.ulimit {
+            use nix::sys::resource::{setrlimit, Resource};
+            let soft_limit = (args.concurrent * 3) as u64;
+            let hard_limit = 1048576;
+            // Maybe root permission is required
+            setrlimit(Resource::RLIMIT_NOFILE, soft_limit.into(), hard_limit)?;
+        }
     }
 
     let ctx = move |auth: AuthMode| ProxyContext {
+        auth,
         bind: args.bind,
         concurrent: args.concurrent,
-        auth,
         whitelist: args.whitelist,
-        connector: Connector::new(args.cidr, args.fallback, args.connect_timeout),
+        connector: Connector::new(
+            args.cidr,
+            args.cidr_range,
+            args.fallback,
+            args.connect_timeout,
+        ),
     };
 
     tokio::runtime::Builder::new_multi_thread()
