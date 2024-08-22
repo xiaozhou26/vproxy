@@ -13,16 +13,21 @@ use std::net::{IpAddr, SocketAddr};
 use tracing::Level;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
-pub struct ProxyContext {
+struct ProxyContext {
+    /// Bind address
     pub bind: SocketAddr,
+    /// Number of concurrent connections
     pub concurrent: usize,
+    /// Authentication type
     pub auth: AuthMode,
+    /// Ip whitelist
     pub whitelist: Vec<IpAddr>,
+    /// Connector
     pub connector: Connector,
 }
 
-
 pub fn run(args: BootArgs) -> crate::Result<()> {
+    // Initialize the logger with a filter that ignores WARN level logs for netlink_proto
     let filter = EnvFilter::from_default_env()
         .add_directive(
             if args.debug {
@@ -49,21 +54,32 @@ pub fn run(args: BootArgs) -> crate::Result<()> {
     tracing::info!("Concurrent: {}", args.concurrent);
     tracing::info!("Connect timeout: {:?}s", args.connect_timeout);
 
+    
+
     #[cfg(target_family = "unix")]
     {
-        use nix::sys::resource::{setrlimit, Resource};
-        let soft_limit = (args.concurrent * 3) as u64;
-        let hard_limit = 1048576;
-        setrlimit(Resource::RLIMIT_NOFILE, soft_limit.into(), hard_limit)?;
+        if args.ulimit {
+            use nix::sys::resource::{setrlimit, Resource};
+            let soft_limit = (args.concurrent * 3) as u64;
+            let hard_limit = 1048576;
+            // Maybe root permission is required
+            setrlimit(Resource::RLIMIT_NOFILE, soft_limit.into(), hard_limit)?;
+        }
     }
 
     let ctx = move |auth: AuthMode| ProxyContext {
+        auth,
         bind: args.bind,
         concurrent: args.concurrent,
-        auth,
         whitelist: args.whitelist,
-        connector: Connector::new(args.cidr, args.fallback, args.connect_timeout,args.fixed_subnet_48),
+        connector: Connector::new(
+            args.cidr,
+            args.cidr_range,
+            args.fallback,
+            args.connect_timeout,
+        ),
     };
+
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .max_blocking_threads(args.concurrent)

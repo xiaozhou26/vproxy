@@ -1,10 +1,6 @@
 mod ttl;
 
-use super::{
-    extension::Extension,
-    http::error::Error,
-    socks5::{self, proto::UsernamePassword},
-};
+use super::{extension::Extension, http::error::Error};
 use cidr::{IpCidr, Ipv4Cidr, Ipv6Cidr};
 use http::{Request, Response};
 use hyper::body::Incoming;
@@ -29,6 +25,8 @@ pub struct Connector {
     /// Optional IPv6 CIDR (Classless Inter-Domain Routing), used to optionally
     /// configure an IPv6 address.
     cidr: Option<IpCidr>,
+    /// Optional CIDR range for IP addresses.
+    cidr_range: Option<u8>,
     /// Optional IP address as a fallback option in case of connection failure.
     fallback: Option<IpAddr>,
     /// Connect timeout in milliseconds.
@@ -44,12 +42,14 @@ impl Connector {
     /// fallback IP address as parameters.
     pub(super) fn new(
         cidr: Option<IpCidr>,
+        cidr_range: Option<u8>,
         fallback: Option<IpAddr>,
         connect_timeout: u64,
         fixed_subnet_48: Option<Ipv6Cidr>,
     ) -> Self {
         Connector {
             cidr,
+            cidr_range,
             fallback,
             connect_timeout: Duration::from_secs(connect_timeout),
             ttl: ttl::TTLCalculator,
@@ -261,103 +261,43 @@ impl Connector {
         extension: &Extension,
     ) -> std::io::Result<TcpStream> {
         match extension {
-            Extension::Http2Socks5(host, auth) => {
-                timeout(
-                    self.connect_timeout,
-                    self.try_connect_to_socks5(target_addr, host, auth),
-                )
-                .await?
-            }
-
-            Extension::None | Extension::Session(_, _) | Extension::TTL(_) => {
-                match (self.cidr, self.fallback) {
-                    (None, Some(fallback)) => {
-                        timeout(
-                            self.connect_timeout,
-                            self.try_connect_with_addr(target_addr, fallback),
-                        )
-                        .await?
-                    }
-                    (Some(cidr), None) => {
-                        timeout(
-                            self.connect_timeout,
-                            self.try_connect_with_cidr(target_addr, cidr, &extension),
-                        )
-                        .await?
-                    }
-                    (Some(cidr), Some(fallback)) => {
-                        timeout(
-                            self.connect_timeout,
-                            self.try_connect_with_cidr_and_fallback(
-                                target_addr,
-                                cidr,
-                                fallback,
-                                &extension,
-                            ),
-                        )
-                        .await?
-                    }
-                    _ => timeout(self.connect_timeout, TcpStream::connect(target_addr)).await?,
+            Extension::None
+            | Extension::Range(_, _)
+            | Extension::Session(_, _)
+            | Extension::TTL(_) => match (self.cidr, self.fallback) {
+                (None, Some(fallback)) => {
+                    timeout(
+                        self.connect_timeout,
+                        self.try_connect_with_addr(target_addr, fallback),
+                    )
+                    .await?
                 }
-            }
+                (Some(cidr), None) => {
+                    timeout(
+                        self.connect_timeout,
+                        self.try_connect_with_cidr(target_addr, cidr, &extension),
+                    )
+                    .await?
+                }
+                (Some(cidr), Some(fallback)) => {
+                    timeout(
+                        self.connect_timeout,
+                        self.try_connect_with_cidr_and_fallback(
+                            target_addr,
+                            cidr,
+                            fallback,
+                            &extension,
+                        ),
+                    )
+                    .await?
+                }
+                _ => timeout(self.connect_timeout, TcpStream::connect(target_addr)).await?,
+            },
         }
         .and_then(|stream| {
             tracing::info!("connect {} via {}", target_addr, stream.local_addr()?);
             Ok(stream)
         })
-    }
-
-    /// Attempts to establish a TCP connection to the target SOCKS5 proxy and then
-    /// to the target address.
-    ///
-    /// This function takes a `SocketAddr` for the target address and a `Url` for
-    /// the SOCKS5 proxy. It resolves the host of the SOCKS5 proxy to a list of IP
-    /// addresses and then attempts to connect to each IP address in turn.
-    /// If a connection to the SOCKS5 proxy is established, it sends a CONNECT
-    /// command to the proxy to establish a connection to the target address. If the
-    /// connection to the target address is successful, it returns the connected
-    /// `TcpStream`.
-    ///
-    /// If all connection attempts fail, it returns the last error encountered. If
-    /// no connection attempts were made because the host could not be resolved to
-    /// any IP addresses, it returns a `ConnectionAborted` error.
-    ///
-    /// # Arguments
-    ///
-    /// * `target_addr` - The target address to connect to.
-    /// * `url` - The URL of the SOCKS5 proxy.
-    ///
-    /// # Returns
-    ///
-    /// This function returns a `std::io::Result<TcpStream>`. If a connection is
-    /// successfully established, it returns `Ok(stream)`. If there is an error at
-    /// any step, it returns the error in the `Result`.
-    async fn try_connect_to_socks5(
-        &self,
-        target_addr: SocketAddr,
-        host: &(String, u16),
-        auth: &Option<UsernamePassword>,
-    ) -> std::io::Result<TcpStream> {
-        let mut last_err = None;
-
-        let host = (host.0.as_str(), host.1);
-        let addrs = lookup_host(host).await?;
-
-        for socket_addr in addrs {
-            match TcpStream::connect(socket_addr).await {
-                Ok(mut stream) => {
-                    let connect =
-                        socks5::client::connect(&mut stream, target_addr, auth.clone()).await?;
-                    tracing::info!("http to socks5 connect {socket_addr} via {connect}");
-                    return Ok(stream);
-                }
-                Err(err) => {
-                    last_err = Some(err);
-                }
-            }
-        }
-
-        Err(error(last_err))
     }
 
     /// Attempts to establish a TCP connection to the target address using an IP
@@ -562,16 +502,27 @@ impl Connector {
     /// generates a random IPv4 address within the CIDR range.
     fn assign_ipv4_from_extension(&self, cidr: &Ipv4Cidr, extension: &Extension) -> Ipv4Addr {
         if let Some(combined) = self.combined(extension) {
-            // Calculate the subnet mask and apply it to ensure the base_ip is preserved in
-            // the non-variable part
-            let subnet_mask = !((1u32 << (32 - cidr.network_length())) - 1);
-            let base_ip_bits = u32::from(cidr.first_address()) & subnet_mask;
-            let capacity = 2u32.pow(32 - cidr.network_length() as u32) - 1;
-            let ip_num = base_ip_bits | ((combined as u32) % capacity);
-            return Ipv4Addr::from(ip_num);
+            match extension {
+                Extension::TTL(_) | Extension::Session(_, _) => {
+                    // Calculate the subnet mask and apply it to ensure the base_ip is preserved in
+                    // the non-variable part
+                    let subnet_mask = !((1u32 << (32 - cidr.network_length())) - 1);
+                    let base_ip_bits = u32::from(cidr.first_address()) & subnet_mask;
+                    let capacity = 2u32.pow(32 - cidr.network_length() as u32) - 1;
+                    let ip_num = base_ip_bits | ((combined as u32) % capacity);
+                    return Ipv4Addr::from(ip_num);
+                }
+                Extension::Range(_, _) => {
+                    // If a CIDR range is provided, use it to assign an IP address
+                    if let Some(range) = self.cidr_range {
+                        return assign_ipv4_with_range(cidr, range, combined as u32);
+                    }
+                }
+                _ => {}
+            }
         }
 
-        assign_rand_ipv4(cidr.first_address().into(), cidr.network_length())
+        assign_rand_ipv4(cidr)
     }
 
     /// Assigns an IPv6 address based on the provided CIDR and extension.
@@ -587,16 +538,28 @@ impl Connector {
         }
 
         if let Some(combined) = self.combined(extension) {
-            // Calculate the subnet mask and apply it to ensure the base_ip is preserved in
-            // the non-variable part
-            let subnet_mask = !((1u128 << (128 - cidr.network_length())) - 1);
-            let base_ip_bits = u128::from(cidr.first_address()) & subnet_mask;
-            let capacity = 2u128.pow(128 - cidr.network_length() as u32) - 1;
-            let ip_num = base_ip_bits | (combined % capacity);
-            return Ipv6Addr::from(ip_num);
+            match extension {
+                Extension::TTL(_) | Extension::Session(_, _) => {
+                    let network_length = cidr.network_length();
+                    // Calculate the subnet mask and apply it to ensure the base_ip is preserved in
+                    // the non-variable part
+                    let subnet_mask = !((1u128 << (128 - network_length)) - 1);
+                    let base_ip_bits = u128::from(cidr.first_address()) & subnet_mask;
+                    let capacity = 2u128.pow(128 - network_length as u32) - 1;
+                    let ip_num = base_ip_bits | (combined % capacity);
+                    return Ipv6Addr::from(ip_num);
+                }
+                Extension::Range(_, _) => {
+                    // If a range is provided, use it to assign an IP
+                    if let Some(range) = self.cidr_range {
+                        return assign_ipv6_with_range(cidr, range, combined);
+                    }
+                }
+                _ => {}
+            }
         }
 
-        assign_rand_ipv6(cidr.first_address().into(), cidr.network_length())
+        assign_rand_ipv6(cidr)
     }
 
     fn assign_ipv6_from_fixed_subnet(&self, fixed_subnet: &Ipv6Cidr, fixed_part: u16) -> Ipv6Addr {
@@ -632,8 +595,9 @@ impl Connector {
     /// support combination into a `u128` value.
     fn combined(&self, extension: &Extension) -> Option<u128> {
         match extension {
-            Extension::Session(a, b) => Some(combine(*a, *b)),
             Extension::TTL(ttl) => Some(self.ttl.ttl_boundary(*ttl) as u128),
+            Extension::Range(a, b) => Some(combine(*a, *b)),
+            Extension::Session(a, b) => Some(combine(*a, *b)),
             _ => None,
         }
     }
@@ -678,7 +642,9 @@ fn combine(a: u64, b: u64) -> u128 {
 /// The subnet is defined by the initial IPv4 address and the prefix length.
 /// The network part of the address is preserved, and the host part is randomly
 /// generated.
-fn assign_rand_ipv4(mut ipv4: u32, prefix_len: u8) -> Ipv4Addr {
+fn assign_rand_ipv4(cidr: &Ipv4Cidr) -> Ipv4Addr {
+    let mut ipv4 = u32::from(cidr.first_address());
+    let prefix_len = cidr.network_length();
     let rand: u32 = random();
     let net_part = (ipv4 >> (32 - prefix_len)) << (32 - prefix_len);
     let host_part = (rand << prefix_len) >> prefix_len;
@@ -690,10 +656,138 @@ fn assign_rand_ipv4(mut ipv4: u32, prefix_len: u8) -> Ipv4Addr {
 /// The subnet is defined by the initial IPv6 address and the prefix length.
 /// The network part of the address is preserved, and the host part is randomly
 /// generated.
-fn assign_rand_ipv6(mut ipv6: u128, prefix_len: u8) -> Ipv6Addr {
+fn assign_rand_ipv6(cidr: &Ipv6Cidr) -> Ipv6Addr {
+    let mut ipv6 = u128::from(cidr.first_address());
+    let prefix_len = cidr.network_length();
     let rand: u128 = random();
     let net_part = (ipv6 >> (128 - prefix_len)) << (128 - prefix_len);
     let host_part = (rand << prefix_len) >> prefix_len;
     ipv6 = net_part | host_part;
     ipv6.into()
+}
+
+/// Generates an IPv4 address within a specified CIDR range, where the address is
+/// influenced by a fixed combined value and a random host part.
+///
+/// # Parameters
+/// - `cidr`: The CIDR notation representing the network range, e.g., "192.168.0.0/24".
+/// - `range`: The length of the address range to be fixed by the combined value (e.g., 28 for a /28 subnet).
+/// - `combined`: A fixed value used to influence the specific address within the range.
+///
+/// # Returns
+/// An `Ipv4Addr` representing the generated IPv4 address.
+///
+/// # Example
+/// ```
+/// let cidr = "192.168.0.0/24".parse::<Ipv4Cidr>().unwrap();
+/// let range = 28;
+/// let combined = 0x5;
+/// let ipv4_address = assign_ipv4_with_range(&cidr, range, combined);
+/// println!("Generated IPv4 Address: {}", ipv4_address);
+/// ```
+fn assign_ipv4_with_range(cidr: &Ipv4Cidr, range: u8, combined: u32) -> Ipv4Addr {
+    let base_ip: u32 = u32::from(cidr.first_address());
+    let prefix_len = cidr.network_length();
+
+    // If the range is less than the prefix length, generate a random IP address.
+    if range < prefix_len {
+        return assign_rand_ipv4(cidr);
+    }
+
+    // Shift the combined value to the left by (32 - range) bits to place it in the correct position.
+    let combined_shifted = (combined & ((1u32 << (range - prefix_len)) - 1)) << (32 - range);
+
+    // Create a subnet mask that preserves the fixed network part of the IP address.
+    let subnet_mask = !((1u32 << (32 - prefix_len)) - 1);
+    let subnet_with_fixed = (base_ip & subnet_mask) | combined_shifted;
+
+    // Generate a mask for the host part and a random host part value.
+    let host_mask = (1u32 << (32 - range)) - 1;
+    let host_part: u32 = random::<u32>() & host_mask;
+
+    // Combine the fixed subnet part and the random host part to form the final IP address.
+    Ipv4Addr::from(subnet_with_fixed | host_part)
+}
+
+/// Generates an IPv6 address within a specified CIDR range, where the address is
+/// influenced by a fixed combined value and a random host part.
+///
+/// # Parameters
+/// - `cidr`: The CIDR notation representing the network range, e.g., "2001:470:e953::/48".
+/// - `range`: The length of the address range to be fixed by the combined value (e.g., 64 for a /64 subnet).
+/// - `combined`: A fixed value used to influence the specific address within the range.
+///
+/// # Returns
+/// An `Ipv6Addr` representing the generated IPv6 address.
+///
+/// # Example
+/// ```
+/// let cidr = "2001:470:e953::/48".parse::<Ipv6Cidr>().unwrap();
+/// let range = 64;
+/// let combined = 0x12345;
+/// let ipv6_address = assign_ipv6_with_range(&cidr, range, combined);
+/// println!("Generated IPv6 Address: {}", ipv6_address);
+/// ```
+fn assign_ipv6_with_range(cidr: &Ipv6Cidr, range: u8, combined: u128) -> Ipv6Addr {
+    let base_ip: u128 = cidr.first_address().into();
+    let prefix_len = cidr.network_length();
+
+    // If the range is less than the prefix length, generate a random IP address.
+    if range < prefix_len {
+        return assign_rand_ipv6(cidr);
+    }
+
+    // Shift the combined value to the left by (128 - range) bits to place it in the correct position.
+    let combined_shifted = (combined & ((1u128 << (range - prefix_len)) - 1)) << (128 - range);
+
+    // Create a subnet mask that preserves the fixed network part of the IP address.
+    let subnet_mask = !((1u128 << (128 - prefix_len)) - 1);
+    let subnet_with_fixed = (base_ip & subnet_mask) | combined_shifted;
+
+    // Generate a mask for the host part and a random host part value.
+    let host_mask = (1u128 << (128 - range)) - 1;
+    let host_part: u128 = (random::<u64>() as u128) & host_mask;
+
+    // Combine the fixed subnet part and the random host part to form the final IP address.
+    Ipv6Addr::from(subnet_with_fixed | host_part)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_assign_ipv4_with_fixed_combined() {
+        let cidr = "192.168.0.0/24".parse::<Ipv4Cidr>().unwrap();
+        let range = 28;
+        let mut combined = 0x5;
+
+        for i in 0..5 {
+            combined += i;
+
+            // Generate two IPv4 addresses with the same combined value
+            let ipv4_address1 = assign_ipv4_with_range(&cidr, range, combined);
+            let ipv4_address2 = assign_ipv4_with_range(&cidr, range, combined);
+
+            println!("IPv4 Address 1: {}", ipv4_address1);
+            println!("IPv4 Address 2: {}", ipv4_address2);
+        }
+    }
+
+    #[test]
+    fn test_assign_ipv6_with_fixed_combined() {
+        let cidr = "2001:470:e953::/48".parse().unwrap();
+        let range = 64;
+        let mut combined = 0x12345;
+
+        for i in 0..5 {
+            combined += i;
+            // Generate two IPv6 addresses with the same combined value
+            let ipv6_address1 = assign_ipv6_with_range(&cidr, range, combined);
+            let ipv6_address2 = assign_ipv6_with_range(&cidr, range, combined);
+
+            println!("{}", ipv6_address1);
+            println!("{}", ipv6_address2)
+        }
+    }
 }
