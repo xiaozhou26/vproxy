@@ -1,13 +1,13 @@
-[![CI](https://github.com/0x676e67/vproxy/actions/workflows/ci.yml/badge.svg)](https://github.com/0x676e67/vproxy/actions/workflows/ci.yml)
-[![CI](https://github.com/0x676e67/vproxy/actions/workflows/release.yml/badge.svg)](https://github.com/0x676e67/vproxy/actions/workflows/release.yml)
-<a target="_blank" href="https://github.com/0x676e67/vproxy/blob/main/LICENSE">
+[![CI](https://github.com/xiaozhou26/vproxy/actions/workflows/ci.yml/badge.svg)](https://github.com/xiaozhou26/vproxy/actions/workflows/ci.yml)
+[![CI](https://github.com/xiaozhou26/vproxy/actions/workflows/release.yml/badge.svg)](https://github.com/xiaozhou26/vproxy/actions/workflows/release.yml)
+<a target="_blank" href="https://github.com/xiaozhou26/vproxy/blob/main/LICENSE">
 <img src="https://img.shields.io/badge/GPL-3.0-blue.svg"/>
 </a>
-<a href="https://github.com/0x676e67/vproxy/releases">
-<img src="https://img.shields.io/github/release/0x676e67/vproxy.svg?style=flat">
+<a href="https://github.com/xiaozhou26/vproxy/releases">
+<img src="https://img.shields.io/github/release/xiaozhou26/vproxy.svg?style=flat">
 </a>
-</a><a href="https://github.com/0x676e67/vproxy/releases">
-<img src="https://img.shields.io/github/downloads/0x676e67/vproxy/total?style=flat">
+</a><a href="https://github.com/xiaozhou26/vproxy/releases">
+<img src="https://img.shields.io/github/downloads/xiaozhou26/vproxy/total?style=flat">
 </a>
 
 # vproxy
@@ -80,16 +80,16 @@ Options:
 
 ## Installation
 
-If you need more detailed installation and usage information, please check [wiki](https://github.com/0x676e67/vproxy/wiki)
+If you need more detailed installation and usage information, please check [wiki](https://github.com/xiaozhou26/vproxy/wiki)
 
 ## Contributing
 
-If you would like to submit your contribution, please open a [Pull Request](https://github.com/0x676e67/vproxy/pulls).
+If you would like to submit your contribution, please open a [Pull Request](https://github.com/xiaozhou26/vproxy/pulls).
 
 ## Getting help
 
-Your question might already be answered on the [issues](https://github.com/0x676e67/vproxy/issues)
+Your question might already be answered on the [issues](https://github.com/xiaozhou26/vproxy/issues)
 
 ## License
 
-**vproxy** © [0x676e67](https://github.com/0x676e67), Released under the [GPL-3.0](./LICENSE) License.
+**vproxy** © [xiaozhou26](https://github.com/xiaozhou26), Released under the [GPL-3.0](./LICENSE) License.

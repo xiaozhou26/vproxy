@@ -3,7 +3,7 @@ use self_github_update::cargo_crate_version;
 pub(super) fn update() -> Result<(), Box<dyn std::error::Error>> {
     use self_github_update::update::UpdateStatus;
     let status = self_github_update::backends::github::Update::configure()
-        .repo_owner("0x676e67")
+        .repo_owner("xiaozhou26")
         .repo_name("vproxy")
         .bin_name("vproxy")
         .target(self_github_update::get_target())
