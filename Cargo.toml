@@ -1,6 +1,6 @@
 [package]
 name = "vproxy"
-version = "1.2.5"
+version = "1.0.2"
 edition = "2021"
 description = "An easy and powerful Rust HTTP/Socks5/HTTP2Socks5 Proxy"
 readme = "README.md"
@@ -68,6 +68,7 @@ tcmalloc = ["tcmalloc/bundled"]
 snmalloc = ["snmalloc-rs"]
 rpmalloc = ["dep:rpmalloc"]
 mimalloc = ["dep:mimalloc"]
+
 
 [profile.release]
 lto = true
