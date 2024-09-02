@@ -1,3 +1,10 @@
+[package]
+name = "vproxy"
+version = "1.2.5"
+readme = "README.md"
+license = "MIT"
+rust-version = "1.76"
+
 [dependencies]
 base64 = "0.22.0"
 cidr = "0.2.2"
